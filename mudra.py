@@ -13,8 +13,9 @@ Gestures:
   grab & move : make a fist -> holds the left button; move your fist to drag and
                 open your hand to drop (great for moving windows/objects)
 
-Hotkeys (read globally via evdev, so they work regardless of window focus):
-  q / Esc quit · p pause   (Ctrl+C also quits)
+Hotkeys:
+  q / Esc quit · p pause while the preview window has focus.
+  Ctrl+Alt+Q quits · Ctrl+Alt+P pauses globally via Electron/XDG Portal.
 
 No pip, no venv, no PyTorch: the models are small ONNX files executed by the
 distro's python3-opencv. See mp_hand.py.
@@ -25,7 +26,6 @@ import argparse
 import math
 import os
 import pathlib
-import select
 import signal
 import sys
 import threading
@@ -116,8 +116,8 @@ class VirtualMouse:
         except (PermissionError, OSError) as exc:
             raise SystemExit(
                 f"Cannot open /dev/uinput ({exc}).\n"
-                "Run ./setup.sh first (adds a udev rule + puts you in the "
-                "'input' group), then launch via ./run.sh.")
+                "Run ./setup.sh first (installs a session-scoped udev "
+                "uaccess rule), then launch via ./run.sh.")
         self.pos = np.array([0.5, 0.5])
 
     def move_to(self, target_norm):
@@ -154,52 +154,54 @@ class VirtualMouse:
 
 
 # ---------------------------------------------------------------------------
-# Global hotkeys via evdev: works no matter which window has focus (important
-# while the cursor is being driven by your hand). Observes only, never grabs.
+# Commands from the Electron launcher.  The launcher owns global shortcuts via
+# the Wayland GlobalShortcuts portal and writes only the allow-listed commands
+# below to this pipe.  Python never opens /dev/input/event*.
 # ---------------------------------------------------------------------------
-class KeyListener:
-    def __init__(self):
-        self.devs, self.ec, self.kmap = [], None, {}
-        try:
-            from evdev import InputDevice, list_devices, ecodes
-        except Exception:
+class ControlChannel:
+    ALLOWED = {"pause", "quit"}
+
+    def __init__(self, enabled):
+        self.fd = None
+        self._buf = b""
+        if not enabled:
             return
-        self.ec = ecodes
-        for path in list_devices():
-            try:
-                d = InputDevice(path)
-                caps = d.capabilities().get(ecodes.EV_KEY, [])
-                if ecodes.KEY_Q in caps and ecodes.KEY_ENTER in caps:
-                    os.set_blocking(d.fd, False)
-                    self.devs.append(d)
-                else:
-                    d.close()
-            except Exception:
-                pass
-        self.kmap = {ecodes.KEY_Q: "q", ecodes.KEY_ESC: "q", ecodes.KEY_P: "p"}
+        try:
+            self.fd = sys.stdin.fileno()
+            os.set_blocking(self.fd, False)
+        except (AttributeError, OSError, ValueError):
+            self.fd = None
 
     def poll(self):
-        out = []
-        if not self.devs:
-            return out
-        r, _, _ = select.select(self.devs, [], [], 0)
-        for d in r:
-            try:
-                for ev in d.read():
-                    if ev.type == self.ec.EV_KEY and ev.value == 1:
-                        c = self.kmap.get(ev.code)
-                        if c:
-                            out.append(c)
-            except OSError:
-                pass
-        return out
+        if self.fd is None:
+            return []
 
-    def close(self):
-        for d in self.devs:
+        while True:
             try:
-                d.close()
-            except Exception:
-                pass
+                chunk = os.read(self.fd, 4096)
+            except BlockingIOError:
+                break
+            except OSError:
+                self.fd = None
+                break
+            if not chunk:
+                self.fd = None
+                break
+            self._buf += chunk
+            if len(self._buf) > 16384:
+                self._buf = self._buf[-16384:]
+
+        if b"\n" not in self._buf:
+            return []
+
+        lines = self._buf.split(b"\n")
+        self._buf = lines.pop()
+        out = []
+        for line in lines:
+            command = line.decode("utf-8", errors="ignore").strip()
+            if command in self.ALLOWED:
+                out.append(command)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -307,9 +309,10 @@ class HandTracker:
 # The app: a small preview window driven by a QTimer.
 # ---------------------------------------------------------------------------
 class HandMouse(QWidget):
-    def __init__(self, model, cap, mouse, keys, args):
+    def __init__(self, model, cap, mouse, control, args):
         super().__init__()
-        self.model, self.cap, self.mouse, self.keys = model, cap, mouse, keys
+        self.model, self.cap, self.mouse = model, cap, mouse
+        self.control = control
         self.args = args
         self.fx = OneEuro(mincutoff=args.mincutoff, beta=args.beta)
         self.fy = OneEuro(mincutoff=args.mincutoff, beta=args.beta)
@@ -343,15 +346,18 @@ class HandMouse(QWidget):
             self.left_down = False
         self.grabbing = False
 
+    def _toggle_pause(self):
+        self.paused = not self.paused
+        if self.paused:
+            self._release_left()
+
     def tick(self):
-        for k in self.keys.poll():
-            if k == "q":
+        for command in self.control.poll():
+            if command == "quit":
                 self.quit()
                 return
-            if k == "p":
-                self.paused = not self.paused
-                if self.paused:
-                    self._release_left()
+            if command == "pause":
+                self._toggle_pause()
         frame = self.cap.latest()
         if frame is None:
             return
@@ -498,10 +504,12 @@ class HandMouse(QWidget):
         p.setPen(QColor(160, 160, 160))
         p.drawText(8, self.height() - 10,
                    "fist=grab/move · thumb+middle=L-click · thumb+index=R-click "
-                   "· q quit · p pause")
+                   "· q/esc quit · p pause")
 
     def keyPressEvent(self, e):
-        if e.key() in (Qt.Key.Key_Q, Qt.Key.Key_Escape):
+        if e.key() == Qt.Key.Key_P:
+            self._toggle_pause()
+        elif e.key() in (Qt.Key.Key_Q, Qt.Key.Key_Escape):
             self.quit()
 
     def quit(self):
@@ -509,7 +517,6 @@ class HandMouse(QWidget):
         self._release_left()
         self.cap.release()
         self.mouse.close()
-        self.keys.close()
         QApplication.instance().quit()
 
 
@@ -532,6 +539,8 @@ def build_args():
                    help="One-Euro: lower = smoother/steadier when holding still")
     p.add_argument("--beta", type=float, default=0.05,
                    help="One-Euro: higher = snappier on fast moves")
+    p.add_argument("--control-stdin", action="store_true",
+                   help=argparse.SUPPRESS)
     return p.parse_args()
 
 
@@ -557,11 +566,12 @@ def main():
         warm += 1
 
     app = QApplication(sys.argv)
-    keys = KeyListener()
-    if not keys.devs:
-        print("WARNING: no readable keyboard via evdev; use Ctrl+C to quit.")
+    control = ControlChannel(args.control_stdin)
+    if not args.control_stdin:
+        print("NOTE: global shortcuts are disabled when mudra.py is run directly; "
+              "use ./run.sh for Electron/XDG Portal hotkeys.")
     mouse = VirtualMouse()
-    win = HandMouse(model, cap, mouse, keys, args)  # noqa: F841
+    win = HandMouse(model, cap, mouse, control, args)  # noqa: F841
     signal.signal(signal.SIGINT, lambda *_: win.quit())
     print("mudra running. Point with your index finger; pinch to click; "
           "fist to grab.")
