@@ -1,0 +1,45 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+echo "== shell syntax =="
+bash -n setup.sh
+bash -n run.sh
+
+echo "== Python syntax =="
+python3 -m py_compile mudra.py mp_hand.py
+
+echo "== Electron JS syntax =="
+node --check electron/main.js
+node -e 'const p=require("./package.json"); if (p.devDependencies.electron !== "45.0.0-alpha.14") process.exit(1)'
+
+echo "== security invariants =="
+if grep -Eq 'InputDevice|list_devices|select\.select' mudra.py; then
+    echo "raw keyboard-event listener code reappeared in mudra.py"
+    exit 1
+fi
+if grep -Eq 'usermod[^\n]*input|groupadd[[:space:]]+input' setup.sh; then
+    echo "broad input-group provisioning reappeared in setup.sh"
+    exit 1
+fi
+if grep -Fq 'sg input' run.sh || grep -Fq '$*' run.sh; then
+    echo "unsafe legacy launcher path reappeared"
+    exit 1
+fi
+
+grep -Fq 'TAG+="uaccess"' setup.sh
+grep -Fq 'io.github.crakxx.mudra.desktop' setup.sh
+grep -Fq 'io.github.crakxx.mudra.desktop' electron/main.js
+grep -Fq 'shell: false' electron/main.js
+grep -Fq 'class ControlChannel' mudra.py
+
+echo "== supply-chain pins =="
+grep -Fq '47534e27c9851bb1128ccc0102f1145e27f23f98' setup.sh
+grep -Fq '78ff51c38496b7fc8b8ebdb6cc8c1abb02fa6c38427c6848254cdaba57fcce7c' setup.sh
+grep -Fq 'db0898ae717b76b075d9bf563af315b29562e11f8df5027a1ef07b02bef6d81c' setup.sh
+if grep -Fq 'opencv_zoo/main/models' setup.sh; then
+    echo "unpinned OpenCV main-branch model URL reappeared"
+    exit 1
+fi
+
+echo "All security smoke checks passed."
