@@ -42,6 +42,15 @@ if [ "${1:-}" = "--system" ]; then
     modprobe uinput || true
     echo uinput > /etc/modules-load.d/uinput.conf
 
+    # Remove only the exact legacy rule written by older Mudra versions.
+    # Do not delete an unrelated administrator-provided 99-uinput.rules.
+    LEGACY_RULE=/etc/udev/rules.d/99-uinput.rules
+    LEGACY_LINE='KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"'
+    if [ -f "$LEGACY_RULE" ] && [ "$(tr -d '\r\n' < "$LEGACY_RULE")" = "$LEGACY_LINE" ]; then
+        echo "== Removing legacy broad input-group udev rule =="
+        rm -f "$LEGACY_RULE"
+    fi
+
     # Do NOT add the user to the broad 'input' group.  uaccess lets logind
     # grant /dev/uinput only to the active local seat user via an ACL.
     cat > /etc/udev/rules.d/69-mudra-uinput.rules <<'EOF'
@@ -78,10 +87,22 @@ if [ ! -e /dev/uinput ] || [ ! -w /dev/uinput ]; then
     exit 1
 fi
 
+if id -nG | tr ' ' '\n' | grep -qx input; then
+    echo "WARNING: your account is still a member of the broad 'input' group."
+    echo "Mudra no longer needs it. If you joined it only for an older Mudra,"
+    echo "remove that membership with: sudo gpasswd -d \"$USER\" input"
+    echo "Then log out and back in so the removal takes effect."
+fi
+
 echo "== Installing pinned Electron 45 alpha =="
 (
     cd "$DIR"
     npm install --include=dev --no-audit --no-fund --package-lock=false --save=false
+    installed_electron="$(node -p "require('./node_modules/electron/package.json').version")"
+    if [ "$installed_electron" != "45.0.0-alpha.14" ]; then
+        echo "ERROR: expected Electron 45.0.0-alpha.14, got $installed_electron"
+        exit 1
+    fi
 )
 
 # A real reverse-DNS .desktop identity is required by GNOME's GlobalShortcuts
@@ -113,16 +134,49 @@ if command -v update-desktop-database >/dev/null; then
     update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 fi
 
-ZOO="https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models"
-for model in \
-    "palm_detection_mediapipe/palm_detection_mediapipe_2023feb.onnx" \
-    "handpose_estimation_mediapipe/handpose_estimation_mediapipe_2023feb.onnx"
-do
-    f="$DIR/$(basename "$model")"
-    if [ ! -e "$f" ]; then
-        echo "== Downloading $(basename "$model") =="
-        curl -fL --retry 3 -o "$f" "$ZOO/$model"
+ZOO_COMMIT="47534e27c9851bb1128ccc0102f1145e27f23f98"
+ZOO_BASE="https://media.githubusercontent.com/media/opencv/opencv_zoo/$ZOO_COMMIT/models"
+
+fetch_model() {
+    local relative="$1"
+    local expected_sha256="$2"
+    local name dest tmp
+    name="$(basename "$relative")"
+    dest="$DIR/$name"
+
+    if [ -f "$dest" ] && printf '%s  %s\n' "$expected_sha256" "$dest" | sha256sum -c --status; then
+        echo "== Verified $name =="
+        return 0
     fi
-done
+
+    if [ -e "$dest" ]; then
+        echo "WARNING: existing $name failed SHA-256 verification; replacing it."
+    else
+        echo "== Downloading $name =="
+    fi
+
+    tmp="$(mktemp "$DIR/.$name.XXXXXX")"
+    if ! curl --proto '=https' --tlsv1.2 -fL --retry 3 \
+        -o "$tmp" "$ZOO_BASE/$relative"; then
+        rm -f "$tmp"
+        return 1
+    fi
+
+    if ! printf '%s  %s\n' "$expected_sha256" "$tmp" | sha256sum -c --status; then
+        echo "ERROR: SHA-256 verification failed for $name"
+        rm -f "$tmp"
+        return 1
+    fi
+
+    chmod 0644 "$tmp"
+    mv -f -- "$tmp" "$dest"
+}
+
+fetch_model \
+    "palm_detection_mediapipe/palm_detection_mediapipe_2023feb.onnx" \
+    "78ff51c38496b7fc8b8ebdb6cc8c1abb02fa6c38427c6848254cdaba57fcce7c"
+fetch_model \
+    "handpose_estimation_mediapipe/handpose_estimation_mediapipe_2023feb.onnx" \
+    "db0898ae717b76b075d9bf563af315b29562e11f8df5027a1ef07b02bef6d81c"
 
 echo "== Done. Launch with ./run.sh =="
