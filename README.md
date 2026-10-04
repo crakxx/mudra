@@ -262,7 +262,23 @@ GlobalShortcuts portal rejects unidentifiable host applications.
 ./run.sh
 ```
 
-Beim normalen Start öffnet Electron zusätzlich das lokale **Mudra-Dashboard**.
+Beim normalen Start öffnet Electron das lokale **Mudra-Dashboard direkt im
+Vollbildmodus**. Die Kameravorschau sitzt klein und fest **oben rechts** im
+Dashboard. Sie ist an den Viewport gebunden und bleibt deshalb beim Scrollen an
+derselben Stelle.
+
+Unter Wayland wird dafür bewusst kein separates Kamerafenster positioniert:
+GNOME/Wayland garantiert Anwendungen keine frei wählbare Position für normale
+Top-Level-Fenster. Stattdessen überträgt Python eine kleine lokale
+JPEG-Vorschau über einen separaten Pipe-Kanal an Electron. Es gibt dabei keinen
+Netzwerkzugriff.
+
+Die Vorschau ist auf etwa 320 Pixel Breite begrenzt und auf ungefähr 10 Bilder
+pro Sekunde gedrosselt, damit die eigentliche Handerkennung Vorrang behält.
+Wenn das Dashboard läuft, bleibt das bisherige PyQt-Kamerafenster verborgen.
+Beim direkten Start mit `python3 mudra.py` bleibt die klassische Vorschau als
+Fallback erhalten.
+
 Die Handsteuerung läuft weiter, wenn das Dashboard-Fenster geschlossen wird.
 
 ### Barrierearmes Einstellungs-Dashboard
@@ -299,6 +315,10 @@ sandbox          = true
 ```
 
 und einer Content-Security-Policy ohne Netzwerkzugriff (`connect-src 'none'`).
+
+Die eingebettete Kameravorschau verwendet ausschließlich einen geerbten lokalen
+Dateideskriptor zwischen Electron und Python. Die Frames verlassen den Rechner
+nicht.
 
 Mit **„Alle Werte auf Standard zurücksetzen“** lassen sich die empfohlenen
 Startwerte jederzeit wiederherstellen.
