@@ -17,24 +17,24 @@ if [ "${1:-}" = "--system" ]; then
     if command -v zypper >/dev/null; then
         zypper --non-interactive install --no-recommends \
             python3 python3-opencv python3-numpy python3-evdev python3-PyQt6 \
-            qt6-wayland nodejs npm curl
+            python3-atspi qt6-wayland nodejs npm curl
     elif command -v apt-get >/dev/null; then
         apt-get update
         apt-get install -y --no-install-recommends \
             python3 python3-opencv python3-numpy python3-evdev python3-pyqt6 \
-            qt6-wayland nodejs npm curl
+            python3-pyatspi qt6-wayland nodejs npm curl
     elif command -v dnf >/dev/null; then
         dnf install -y \
             python3 python3-opencv python3-numpy python3-evdev python3-pyqt6 \
-            qt6-qtwayland nodejs npm curl
+            python3-pyatspi qt6-qtwayland nodejs npm curl
     elif command -v pacman >/dev/null; then
         pacman -S --needed --noconfirm \
             python python-opencv python-numpy python-evdev python-pyqt6 \
-            qt6-wayland nodejs npm curl
+            python-atspi qt6-wayland nodejs npm curl
     else
         echo "!! No supported package manager found (zypper/apt/dnf/pacman)."
         echo "   Install manually: python3, OpenCV python bindings, NumPy,"
-        echo "   python-evdev, PyQt6, Qt6 Wayland, Node.js, npm and curl."
+        echo "   python-evdev, PyQt6, pyatspi, Qt6 Wayland, Node.js, npm and curl."
         echo "   Continuing with /dev/uinput setup..."
     fi
 
