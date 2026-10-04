@@ -230,8 +230,49 @@ GlobalShortcuts portal rejects unidentifiable host applications.
 ./run.sh
 ```
 
+Beim normalen Start öffnet Electron zusätzlich das lokale **Mudra-Dashboard**.
+Die Handsteuerung läuft weiter, wenn das Dashboard-Fenster geschlossen wird.
+
+### Barrierearmes Einstellungs-Dashboard
+
+Das Dashboard ist bewusst für gute Lesbarkeit ausgelegt:
+
+- **sehr große Standardschrift** und drei wählbare Textgrößen,
+- hoher Hell-Dunkel-Kontrast ohne Informationen nur über Farbe zu vermitteln,
+- große Klick-/Touch-Ziele und deutlich sichtbare Tastatur-Fokusrahmen,
+- vollständige Bedienung mit Tab, Shift+Tab, Pfeiltasten, Enter und Leertaste,
+- exakte Zahlenfelder zusätzlich zu den Schiebereglern,
+- klare Gruppen für Klicks, Drag & Drop, Scrollen, Zeiger und Funktionen,
+- für jeden Zahlenwert eine Erklärung für **kleinere** und **größere** Werte,
+- verständliche Fehlermeldungen, wenn zwei Werte nicht zusammenpassen.
+
+Die Werte werden **live** an den laufenden Python-Prozess übertragen und unter
+Electron lokal gespeichert. Ein Neustart ist zum Feinabstimmen nicht nötig.
+
+Explizite Startparameter überschreiben beim Start den gespeicherten Wert, z. B.:
+
+```bash
+./run.sh --scroll-speed 120
+```
+
+Das Dashboard kann nur eine feste Allowlist von Mudra-Einstellungen ändern.
+Es kann keine beliebigen Shell-Befehle an Python schicken. Der Electron-Renderer
+läuft außerdem mit:
+
+```text
+contextIsolation = true
+nodeIntegration  = false
+sandbox          = true
+```
+
+und einer Content-Security-Policy ohne Netzwerkzugriff (`connect-src 'none'`).
+
+Mit **„Alle Werte auf Standard zurücksetzen“** lassen sich die empfohlenen
+Startwerte jederzeit wiederherstellen.
+
 Running `python3 mudra.py` directly is still possible, but global portal
-shortcuts are intentionally disabled in that mode.
+shortcuts and the Electron settings dashboard are intentionally disabled in
+that mode.
 
 ### General tuning
 

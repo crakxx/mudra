@@ -267,7 +267,7 @@ function setupTextSize() {
   const size = ['normal', 'large', 'xlarge'].includes(saved) ? saved : 'large';
   document.documentElement.dataset.textSize = size;
 
-  for (const button of document.querySelectorAll('[data-text-size]')) {
+  for (const button of document.querySelectorAll('button[data-text-size]')) {
     button.setAttribute(
       'aria-pressed',
       button.dataset.textSize === size ? 'true' : 'false'
@@ -276,7 +276,7 @@ function setupTextSize() {
       const next = button.dataset.textSize;
       document.documentElement.dataset.textSize = next;
       localStorage.setItem('mudra-text-size', next);
-      for (const other of document.querySelectorAll('[data-text-size]')) {
+      for (const other of document.querySelectorAll('button[data-text-size]')) {
         other.setAttribute(
           'aria-pressed',
           other.dataset.textSize === next ? 'true' : 'false'
