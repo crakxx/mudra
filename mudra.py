@@ -12,6 +12,7 @@ Desk-mode controls:
   ring finger   : tap for right click
   thumb         : lift/hold to drag; return to the desk to drop
   little finger : reserved for context-aware copy/paste
+  4 fingers     : index+middle+ring+pinky on desk, move together = scroll
 
 Air-mode gestures:
   move          : point with your index finger
@@ -44,7 +45,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPainter, QColor, QFont
 from PyQt6.QtWidgets import QApplication, QWidget
 
-from gestures import DepthHoldDetector, DepthTapDetector
+from gestures import DepthHoldDetector, DepthTapDetector, FourFingerScrollDetector
 from mapping import camera_point_to_screen, transform_normalized, validate_area
 from smart_context import SmartCopyPasteContext
 
@@ -161,6 +162,14 @@ class VirtualMouse:
         self.press(button)
         time.sleep(0.03)
         self.release(button)
+
+    def scroll(self, steps):
+        """Emit discrete vertical wheel ticks; positive scrolls up."""
+        steps = int(steps)
+        if steps == 0:
+            return
+        self.ui.write(self.e.EV_REL, self.e.REL_WHEEL, steps)
+        self.ui.syn()
 
     def _ensure_keyboard(self):
         if self.keyboard is None:
@@ -408,6 +417,12 @@ class HandMouse(QWidget):
             args.tap_lift, args.tap_return, args.tap_cooldown)
         self.thumb_drag = DepthHoldDetector(
             args.thumb_lift, args.thumb_return)
+        self.four_finger_scroll = FourFingerScrollDetector(
+            rest_threshold=args.scroll_rest,
+            start_delta=args.scroll_start,
+            speed=args.scroll_speed,
+            release_timeout=args.scroll_release,
+            invert=args.invert_scroll)
         self.smart_context = SmartCopyPasteContext(
             enabled=args.smart_pinky, max_nodes=args.atspi_max_nodes)
         self.setWindowTitle(f"mudra — {args.mode} mode")
@@ -422,6 +437,7 @@ class HandMouse(QWidget):
         self.ring_tap.reset()
         self.pinky_tap.reset()
         self.thumb_drag.reset()
+        self.four_finger_scroll.reset()
 
     def _release_left(self):
         if self.left_down:
@@ -474,8 +490,53 @@ class HandMouse(QWidget):
     def _handle_desk_hand(self, kp, conf, shape, now):
         h, w = shape[:2]
 
-        # The middle fingertip is the cursor anchor. It can stay resting on the
-        # desk while the remaining fingers move independently.
+        # MediaPipe already predicts relative Z. Normalize each fingertip's Z
+        # against its MCP and the hand's X/Y size, so moving the whole hand up
+        # or down does not look like a click.
+        scale = max(_dist(kp[INDEX_MCP], kp[PINKY_MCP]),
+                    _dist(kp[WRIST], kp[MIDDLE_MCP])) + 1e-3
+        index_z = _finger_depth(kp, INDEX_TIP, INDEX_MCP, scale)
+        middle_z = _finger_depth(kp, MIDDLE_TIP, MIDDLE_MCP, scale)
+        ring_z = _finger_depth(kp, RING_TIP, RING_MCP, scale)
+        thumb_z = _finger_depth(kp, THUMB_TIP, THUMB_MCP, scale)
+        pinky_z = _finger_depth(kp, PINKY_TIP, PINKY_MCP, scale)
+
+        # Four-finger scrolling is intentionally evaluated before cursor/click
+        # actions. Only the four non-thumb fingers participate: when all four
+        # remain near their learned desk plane and move coherently vertically,
+        # cursor motion and all click/drag gestures are suppressed.
+        scroll_points = []
+        for tip in (INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP):
+            scroll_points.append(transform_normalized(
+                kp[tip][0] / w, kp[tip][1] / h,
+                self.args.rotate, self.args.mirror_x, self.args.mirror_y))
+        scrolling, wheel_steps = self.four_finger_scroll.update(
+            scroll_points, (index_z, middle_z, ring_z, pinky_z), now)
+
+        if self.args.four_finger_scroll and scrolling:
+            if self.left_down:
+                self.mouse.release("left")
+                self.left_down = False
+            self.grabbing = False
+
+            # Prevent a four-finger swipe from becoming clicks/copy/paste when
+            # the scroll gesture ends. Those detectors relearn their rest plane
+            # after scrolling instead.
+            self.index_tap.reset()
+            self.ring_tap.reset()
+            self.pinky_tap.reset()
+            self.thumb_drag.reset()
+            self._hist.clear()
+
+            if not self.paused and wheel_steps:
+                self.mouse.scroll(wheel_steps)
+            self.status = (
+                f"SCROLL {'up' if wheel_steps > 0 else 'down' if wheel_steps < 0 else ''}"
+            ).rstrip()
+            return
+
+        # The middle fingertip is the normal cursor anchor. It can stay resting
+        # on the desk while the remaining fingers act as dedicated controls.
         tx, ty = camera_point_to_screen(
             kp[MIDDLE_TIP][0], kp[MIDDLE_TIP][1], w, h, self.args.area,
             self.args.rotate, self.args.mirror_x, self.args.mirror_y)
@@ -485,16 +546,6 @@ class HandMouse(QWidget):
         pos = np.array([self.fx(mx, now), self.fy(my, now)])
         if not self.paused:
             self.mouse.move_to(pos)
-
-        # MediaPipe already predicts relative Z. Normalize each fingertip's Z
-        # against its MCP and the hand's X/Y size, so moving the whole hand up
-        # or down does not look like a click.
-        scale = max(_dist(kp[INDEX_MCP], kp[PINKY_MCP]),
-                    _dist(kp[WRIST], kp[MIDDLE_MCP])) + 1e-3
-        index_z = _finger_depth(kp, INDEX_TIP, INDEX_MCP, scale)
-        ring_z = _finger_depth(kp, RING_TIP, RING_MCP, scale)
-        thumb_z = _finger_depth(kp, THUMB_TIP, THUMB_MCP, scale)
-        pinky_z = _finger_depth(kp, PINKY_TIP, PINKY_MCP, scale)
 
         index_click = self.index_tap.update(index_z, now)
         ring_click = self.ring_tap.update(ring_z, now)
@@ -676,7 +727,7 @@ class HandMouse(QWidget):
         p.setPen(QColor(160, 160, 160))
         if self.args.mode == "desk":
             help_text = ("middle=cursor · index=L · ring=R · thumb=drag · "
-                         "pinky=copy/paste · p pause")
+                         "pinky=copy/paste · 4 fingers=scroll · p pause")
         else:
             help_text = ("index=cursor · fist=grab · thumb+middle=L · "
                          "thumb+index=R · p pause")
@@ -735,6 +786,22 @@ def build_args():
                    help="desk mode: thumb Z excursion that starts drag")
     p.add_argument("--thumb-return", type=float, default=0.065,
                    help="desk mode: thumb return threshold that drops")
+    p.add_argument("--four-finger-scroll",
+                   action=argparse.BooleanOptionalAction, default=True,
+                   help="desk mode: scroll when index/middle/ring/pinky rest "
+                        "on the desk and move vertically together")
+    p.add_argument("--scroll-rest", type=float, default=0.085,
+                   help="desk mode: max normalized Z deviation for each of the "
+                        "four scrolling fingers to count as resting")
+    p.add_argument("--scroll-start", type=float, default=0.006,
+                   help="desk mode: normalized vertical movement needed to "
+                        "enter four-finger scrolling")
+    p.add_argument("--scroll-speed", type=float, default=95.0,
+                   help="desk mode: wheel ticks per normalized camera-distance")
+    p.add_argument("--scroll-release", type=float, default=0.16,
+                   help="desk mode: idle seconds before leaving scroll mode")
+    p.add_argument("--invert-scroll", action="store_true",
+                   help="invert four-finger vertical scrolling direction")
     p.add_argument("--smart-pinky", action=argparse.BooleanOptionalAction,
                    default=True,
                    help="desk mode: context-aware pinky copy/paste via AT-SPI")
@@ -808,8 +875,8 @@ def main():
     win = HandMouse(model, cap, mouse, control, args)  # noqa: F841
     signal.signal(signal.SIGINT, lambda *_: win.quit())
     if args.mode == "desk":
-        print("mudra desk mode: middle finger moves; index=left, ring=right, "
-              "thumb=drag, pinky=copy/paste.")
+        print("mudra desk mode: middle=cursor; index=left; ring=right; "
+              "thumb=drag; pinky=copy/paste; four fingers=scroll.")
     else:
         print("mudra air mode: point with index; pinch to click; fist to grab.")
     rc = app.exec()
