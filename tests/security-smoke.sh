@@ -37,6 +37,8 @@ grep -Fq 'shell: false' electron/main.js
 grep -Fq 'class ControlChannel' mudra.py
 grep -Fq 'MIDDLE_TIP' mudra.py
 grep -Fq 'DepthTapDetector' mudra.py
+grep -Fq 'FourFingerScrollDetector' mudra.py
+grep -Fq 'REL_WHEEL' mudra.py
 grep -Fq 'SmartCopyPasteContext' mudra.py
 grep -Fq 'getNSelections' smart_context.py
 if grep -Eq '\.(getText|getSelection)\(' smart_context.py; then

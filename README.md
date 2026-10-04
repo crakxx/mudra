@@ -27,6 +27,46 @@ resting and steady** while the other fingers perform actions:
 | **Ring finger** | lift/tap → right click |
 | **Thumb** | lift and hold → drag; return to the desk → drop |
 | **Little finger** | context-aware copy/paste |
+| **Index + middle + ring + little together** | four-finger vertical scroll |
+
+### Four-finger scrolling
+
+Put **all four non-thumb fingers** on the desk and move them together vertically,
+similar to a multi-finger touchpad gesture. The thumb is intentionally ignored
+by scroll recognition.
+
+Mudra enters scroll mode only when:
+
+- index, middle, ring and little finger are all near their learned resting
+  depth on the desk,
+- all four fingertips move coherently in the same vertical direction,
+- vertical movement clearly dominates horizontal movement.
+
+While scrolling, normal middle-finger cursor motion, left/right clicks,
+copy/paste and thumb drag are suppressed. This prevents a scroll gesture from
+also moving the cursor or clicking.
+
+Finger movement upward emits wheel-up events; downward emits wheel-down events.
+Reverse that behavior with:
+
+```bash
+./run.sh --invert-scroll
+```
+
+Useful tuning options:
+
+```bash
+./run.sh --scroll-speed 95
+./run.sh --scroll-start 0.006
+./run.sh --scroll-rest 0.085
+./run.sh --scroll-release 0.16
+```
+
+Disable the gesture entirely with:
+
+```bash
+./run.sh --no-four-finger-scroll
+```
 
 The index/ring/thumb/little-finger actions use the MediaPipe model's relative
 **Z/depth estimate**, not just 2D movement. Each finger learns its own resting
@@ -86,6 +126,7 @@ differ:
 ```bash
 ./run.sh --tap-lift 0.14 --tap-return 0.055
 ./run.sh --thumb-lift 0.16 --thumb-return 0.065
+./run.sh --scroll-start 0.006 --scroll-speed 95
 ```
 
 Increase the `*-lift` values if gestures trigger too easily. Decrease them if
@@ -218,6 +259,8 @@ overhead webcam ─▶ OpenCV DNN ─▶ 21 hand landmarks (X/Y/Z)
                          ▼            ▼              ▼
                   middle finger   depth gestures   pinky context
                     X/Y cursor     clicks/drag       AT-SPI state
+                         │
+                         └──── four resting fingers ────▶ scroll
                          └────────────┬──────────────┘
                                       ▼
                                 /dev/uinput
