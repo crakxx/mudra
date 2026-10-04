@@ -30,6 +30,7 @@ distro's python3-opencv. See mp_hand.py.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import pathlib
@@ -48,6 +49,7 @@ from PyQt6.QtWidgets import QApplication, QWidget
 from gestures import DepthHoldDetector, DepthTapDetector, FourFingerScrollDetector
 from mapping import camera_point_to_screen, transform_normalized, validate_area
 from smart_context import SmartCopyPasteContext
+from runtime_settings import normalize_updates, values_from_args
 
 HERE = pathlib.Path(__file__).resolve().parent
 PALM_MODEL = HERE / "palm_detection_mediapipe_2023feb.onnx"
@@ -252,8 +254,19 @@ class ControlChannel:
         out = []
         for line in lines:
             command = line.decode("utf-8", errors="ignore").strip()
+            if not command:
+                continue
             if command in self.ALLOWED:
                 out.append(command)
+                continue
+            if command.startswith("{"):
+                try:
+                    message = json.loads(command)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if (isinstance(message, dict)
+                        and message.get("type") in ("setting", "settings")):
+                    out.append(message)
         return out
 
 
@@ -425,6 +438,7 @@ class HandMouse(QWidget):
             invert=args.invert_scroll)
         self.smart_context = SmartCopyPasteContext(
             enabled=args.smart_pinky, max_nodes=args.atspi_max_nodes)
+        self.runtime_settings = values_from_args(args)
         self.setWindowTitle(f"mudra — {args.mode} mode")
         self.resize(560, 420)
         self.show()
@@ -445,6 +459,81 @@ class HandMouse(QWidget):
             self.left_down = False
         self.grabbing = False
 
+    def _apply_runtime_updates(self, updates):
+        """Validate and apply dashboard settings without restarting Mudra."""
+        try:
+            accepted = normalize_updates(self.runtime_settings, updates)
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"Dashboard setting rejected: {exc}", file=sys.stderr)
+            return False
+
+        if not accepted:
+            return True
+
+        self.runtime_settings.update(accepted)
+        for key, value in accepted.items():
+            setattr(self.args, key, value)
+
+        changed = set(accepted)
+
+        if changed & {"tap_lift", "tap_return", "tap_cooldown"}:
+            self.index_tap = DepthTapDetector(
+                self.args.tap_lift, self.args.tap_return,
+                self.args.tap_cooldown)
+            self.ring_tap = DepthTapDetector(
+                self.args.tap_lift, self.args.tap_return,
+                self.args.tap_cooldown)
+            self.pinky_tap = DepthTapDetector(
+                self.args.tap_lift, self.args.tap_return,
+                self.args.tap_cooldown)
+
+        if changed & {"thumb_lift", "thumb_return"}:
+            self.thumb_drag = DepthHoldDetector(
+                self.args.thumb_lift, self.args.thumb_return)
+
+        if changed & {
+                "scroll_rest", "scroll_start", "scroll_speed",
+                "scroll_release", "invert_scroll"}:
+            self.four_finger_scroll = FourFingerScrollDetector(
+                rest_threshold=self.args.scroll_rest,
+                start_delta=self.args.scroll_start,
+                speed=self.args.scroll_speed,
+                release_timeout=self.args.scroll_release,
+                invert=self.args.invert_scroll)
+
+        if "four_finger_scroll" in changed:
+            self.four_finger_scroll.reset()
+
+        if "smart_pinky" in changed:
+            self.smart_context.enabled = self.args.smart_pinky
+
+        if "median" in changed:
+            old = list(self._hist)[-self.args.median:]
+            self._hist = deque(old, maxlen=self.args.median)
+
+        if changed & {"mincutoff", "beta"}:
+            self.fx = OneEuro(
+                mincutoff=self.args.mincutoff, beta=self.args.beta)
+            self.fy = OneEuro(
+                mincutoff=self.args.mincutoff, beta=self.args.beta)
+            self._hist.clear()
+
+        if "conf" in changed:
+            self.model.landmarker.conf_threshold = self.args.conf
+
+        self.status = "settings updated"
+        return True
+
+    def _handle_control_message(self, message):
+        if message.get("type") == "setting":
+            key = message.get("key")
+            if isinstance(key, str):
+                self._apply_runtime_updates({key: message.get("value")})
+        elif message.get("type") == "settings":
+            values = message.get("values")
+            if isinstance(values, dict):
+                self._apply_runtime_updates(values)
+
     def _toggle_pause(self):
         self.paused = not self.paused
         self._release_left()
@@ -452,6 +541,9 @@ class HandMouse(QWidget):
 
     def tick(self):
         for command in self.control.poll():
+            if isinstance(command, dict):
+                self._handle_control_message(command)
+                continue
             if command == "quit":
                 self.quit()
                 return
