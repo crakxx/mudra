@@ -4,6 +4,8 @@ const api = window.mudraDashboard;
 const container = document.getElementById('settings-container');
 const status = document.getElementById('connection-status');
 const resetButton = document.getElementById('reset-settings');
+const previewImage = document.getElementById('camera-preview');
+const previewPlaceholder = document.getElementById('camera-preview-placeholder');
 
 let state = null;
 const controls = new Map();
@@ -285,6 +287,12 @@ function setupTextSize() {
     });
   }
 }
+
+api.onPreviewFrame((base64) => {
+  previewImage.src = `data:image/jpeg;base64,${base64}`;
+  previewImage.hidden = false;
+  previewPlaceholder.hidden = true;
+});
 
 resetButton.addEventListener('click', async () => {
   try {
