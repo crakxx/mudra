@@ -7,7 +7,10 @@ bash -n setup.sh
 bash -n run.sh
 
 echo "== Python syntax =="
-python3 -m py_compile mudra.py mp_hand.py
+python3 -m py_compile mudra.py mp_hand.py mapping.py gestures.py smart_context.py
+
+echo "== pure Python unit tests =="
+python3 -m unittest discover -s tests -p 'test_*.py'
 
 echo "== Electron JS syntax =="
 node --check electron/main.js
@@ -32,6 +35,14 @@ grep -Fq 'io.github.crakxx.mudra.desktop' setup.sh
 grep -Fq 'io.github.crakxx.mudra.desktop' electron/main.js
 grep -Fq 'shell: false' electron/main.js
 grep -Fq 'class ControlChannel' mudra.py
+grep -Fq 'MIDDLE_TIP' mudra.py
+grep -Fq 'DepthTapDetector' mudra.py
+grep -Fq 'SmartCopyPasteContext' mudra.py
+grep -Fq 'getNSelections' smart_context.py
+if grep -Eq 'getText|getSelection\(' smart_context.py; then
+    echo "smart copy/paste must not read selected text contents"
+    exit 1
+fi
 
 echo "== supply-chain pins =="
 grep -Fq '47534e27c9851bb1128ccc0102f1145e27f23f98' setup.sh
