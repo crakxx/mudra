@@ -17,6 +17,7 @@ const {
   applyUpdates,
   fromPythonArgs
 } = require('./settings');
+const { JpegFrameDecoder } = require('./preview-stream');
 
 const DESKTOP_ID = 'io.github.crakxx.mudra.desktop';
 const PAUSE_SHORTCUT = 'Control+Alt+P';
@@ -140,6 +141,7 @@ function createDashboard() {
     height: 900,
     minWidth: 760,
     minHeight: 640,
+    fullscreen: true,
     backgroundColor: '#ffffff',
     autoHideMenuBar: true,
     webPreferences: {
@@ -184,10 +186,15 @@ app.whenReady().then(() => {
 
   child = spawn(
     'python3',
-    [path.join(root, 'mudra.py'), '--control-stdin', ...args],
+    [
+      path.join(root, 'mudra.py'),
+      '--control-stdin',
+      ...args,
+      '--preview-fd', '3'
+    ],
     {
       cwd: root,
-      stdio: ['pipe', 'inherit', 'inherit'],
+      stdio: ['pipe', 'inherit', 'inherit', 'pipe'],
       env: { ...process.env, PYTHONUNBUFFERED: '1' },
       shell: false
     }
@@ -198,6 +205,26 @@ app.whenReady().then(() => {
     process.exitCode = 1;
     app.quit();
   });
+
+  const previewDecoder = new JpegFrameDecoder();
+  const previewStream = child.stdio[3];
+  if (previewStream) {
+    previewStream.on('data', (chunk) => {
+      try {
+        for (const frame of previewDecoder.push(chunk)) {
+          if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+            dashboardWindow.webContents.send(
+              'dashboard:preview-frame',
+              frame.toString('base64')
+            );
+          }
+        }
+      } catch (error) {
+        console.error(`Preview stream disabled: ${error.message}`);
+        previewStream.destroy();
+      }
+    });
+  }
 
   child.on('exit', (code, signal) => {
     child = null;

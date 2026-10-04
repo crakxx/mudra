@@ -37,6 +37,7 @@ import math
 import os
 import pathlib
 import signal
+import struct
 import sys
 import threading
 import time
@@ -278,6 +279,75 @@ class ControlChannel:
         return out
 
 
+class PreviewChannel:
+    """Non-blocking JPEG preview stream to Electron over an inherited FD."""
+
+    MAX_FRAME_BYTES = 512 * 1024
+
+    def __init__(self, fd=-1):
+        self.fd = None
+        self._pending = b""
+        if fd is None or int(fd) < 0:
+            return
+        try:
+            self.fd = int(fd)
+            os.set_blocking(self.fd, False)
+        except (OSError, TypeError, ValueError):
+            self.fd = None
+
+    @property
+    def enabled(self):
+        return self.fd is not None
+
+    def _fail(self):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+        self.fd = None
+        self._pending = b""
+
+    def _flush_pending(self):
+        if self.fd is None or not self._pending:
+            return
+        try:
+            sent = os.write(self.fd, self._pending)
+            self._pending = self._pending[sent:]
+        except BlockingIOError:
+            return
+        except OSError:
+            self._fail()
+
+    def send_jpeg(self, payload):
+        if self.fd is None:
+            return False
+        payload = bytes(payload)
+        if not payload or len(payload) > self.MAX_FRAME_BYTES:
+            return False
+
+        self._flush_pending()
+        if self.fd is None or self._pending:
+            # Drop the new frame rather than blocking hand tracking behind UI.
+            return False
+
+        packet = struct.pack("!I", len(payload)) + payload
+        try:
+            sent = os.write(self.fd, packet)
+            if sent < len(packet):
+                self._pending = packet[sent:]
+            return True
+        except BlockingIOError:
+            self._pending = packet
+            return False
+        except OSError:
+            self._fail()
+            return False
+
+    def close(self):
+        self._fail()
+
+
 # ---------------------------------------------------------------------------
 # Hand geometry helpers
 # ---------------------------------------------------------------------------
@@ -405,10 +475,11 @@ class HandTracker:
 # The app: a small preview window driven by a QTimer.
 # ---------------------------------------------------------------------------
 class HandMouse(QWidget):
-    def __init__(self, model, cap, mouse, control, args):
+    def __init__(self, model, cap, mouse, control, preview, args):
         super().__init__()
         self.model, self.cap, self.mouse = model, cap, mouse
         self.control = control
+        self.preview = preview
         self.args = args
         self.fx = OneEuro(mincutoff=args.mincutoff, beta=args.beta)
         self.fy = OneEuro(mincutoff=args.mincutoff, beta=args.beta)
@@ -429,6 +500,7 @@ class HandMouse(QWidget):
         self._last = time.monotonic()
         self._qbuf = None
         self._kp_preview = None
+        self._preview_last = 0.0
         self.index_tap = DepthTapDetector(
             args.tap_lift, args.tap_return, args.tap_cooldown)
         self.ring_tap = DepthTapDetector(
@@ -448,7 +520,12 @@ class HandMouse(QWidget):
         self.runtime_settings = values_from_args(args)
         self.setWindowTitle(f"mudra — {args.mode} mode")
         self.resize(560, 420)
-        self.show()
+        if self.preview.enabled:
+            # Electron owns the visible preview in fullscreen mode. Keeping
+            # this QWidget hidden avoids an extra compositor-managed window.
+            self.hide()
+        else:
+            self.show()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(2)
@@ -795,13 +872,11 @@ class HandMouse(QWidget):
 
     def _draw(self, frame, kp):
         import cv2
-        disp = _orient_frame(
+
+        disp_bgr = _orient_frame(
             frame, self.args.rotate, self.args.mirror_x, self.args.mirror_y)
-        disp = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
-        self._qbuf = np.ascontiguousarray(disp)
-        h, w, _ = self._qbuf.shape
-        self._qimg = QImage(self._qbuf.data, w, h, 3 * w,
-                            QImage.Format.Format_RGB888)
+        h, w = disp_bgr.shape[:2]
+
         self._kp_preview = None
         if kp is not None:
             raw_h, raw_w = frame.shape[:2]
@@ -812,6 +887,53 @@ class HandMouse(QWidget):
                     self.args.rotate, self.args.mirror_x, self.args.mirror_y)
                 mk[i] = (nx * w, ny * h)
             self._kp_preview = (mk, w, h)
+
+        if self.preview.enabled:
+            now = time.monotonic()
+            if now - self._preview_last >= 0.10:
+                self._preview_last = now
+                preview = disp_bgr.copy()
+
+                if self.args.mode == "desk":
+                    left, top, right, bottom = self.args.area
+                    cv2.rectangle(
+                        preview,
+                        (int(left * w), int(top * h)),
+                        (int(right * w), int(bottom * h)),
+                        (255, 190, 80), 2)
+
+                if self._kp_preview is not None:
+                    mk, _, _ = self._kp_preview
+                    for i in (
+                            THUMB_TIP, INDEX_TIP, MIDDLE_TIP,
+                            RING_TIP, PINKY_TIP):
+                        radius = (
+                            9 if i == MIDDLE_TIP
+                            and self.args.mode == "desk" else 6)
+                        cv2.circle(
+                            preview,
+                            (int(mk[i][0]), int(mk[i][1])),
+                            radius, (0, 200, 255), 2)
+
+                max_width = 320
+                if w > max_width:
+                    scale = max_width / float(w)
+                    preview = cv2.resize(
+                        preview,
+                        (max_width, max(1, int(round(h * scale)))),
+                        interpolation=cv2.INTER_AREA)
+
+                ok, encoded = cv2.imencode(
+                    ".jpg", preview,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), 72])
+                if ok:
+                    self.preview.send_jpeg(encoded.tobytes())
+            return
+
+        disp_rgb = cv2.cvtColor(disp_bgr, cv2.COLOR_BGR2RGB)
+        self._qbuf = np.ascontiguousarray(disp_rgb)
+        self._qimg = QImage(self._qbuf.data, w, h, 3 * w,
+                            QImage.Format.Format_RGB888)
         self.update()
 
     def paintEvent(self, _):
@@ -868,6 +990,7 @@ class HandMouse(QWidget):
         self.timer.stop()
         self._release_left()
         self.cap.release()
+        self.preview.close()
         self.mouse.close()
         QApplication.instance().quit()
 
@@ -943,6 +1066,8 @@ def build_args():
                    help="One-Euro: higher = snappier on fast moves")
     p.add_argument("--control-stdin", action="store_true",
                    help=argparse.SUPPRESS)
+    p.add_argument("--preview-fd", type=int, default=-1,
+                   help=argparse.SUPPRESS)
     args = p.parse_args()
 
     if args.mirror_x is None:
@@ -1000,11 +1125,12 @@ def main():
 
     app = QApplication(sys.argv)
     control = ControlChannel(args.control_stdin)
+    preview = PreviewChannel(args.preview_fd)
     if not args.control_stdin:
         print("NOTE: global shortcuts are disabled when mudra.py is run directly; "
               "use ./run.sh for Electron/XDG Portal hotkeys.")
     mouse = VirtualMouse()
-    win = HandMouse(model, cap, mouse, control, args)  # noqa: F841
+    win = HandMouse(model, cap, mouse, control, preview, args)  # noqa: F841
     signal.signal(signal.SIGINT, lambda *_: win.quit())
     if args.mode == "desk":
         print("mudra desk mode: front/angled camera; middle=cursor; "
