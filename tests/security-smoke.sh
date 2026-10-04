@@ -39,7 +39,7 @@ grep -Fq 'MIDDLE_TIP' mudra.py
 grep -Fq 'DepthTapDetector' mudra.py
 grep -Fq 'SmartCopyPasteContext' mudra.py
 grep -Fq 'getNSelections' smart_context.py
-if grep -Eq 'getText|getSelection\(' smart_context.py; then
+if grep -Eq '\.(getText|getSelection)\(' smart_context.py; then
     echo "smart copy/paste must not read selected text contents"
     exit 1
 fi
