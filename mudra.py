@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import QApplication, QWidget
 
 from gestures import DepthHoldDetector, DepthTapDetector
 from mapping import camera_point_to_screen, transform_normalized, validate_area
+from smart_context import SmartCopyPasteContext
 
 HERE = pathlib.Path(__file__).resolve().parent
 PALM_MODEL = HERE / "palm_detection_mediapipe_2023feb.onnx"
@@ -112,6 +113,8 @@ class VirtualMouse:
     def __init__(self):
         from evdev import AbsInfo, UInput, ecodes as e
         self.e = e
+        self._uinput_cls = UInput
+        self.keyboard = None
         cap = {
             e.EV_ABS: [
                 (e.ABS_X, AbsInfo(value=self.RANGE // 2, min=0,
@@ -159,11 +162,39 @@ class VirtualMouse:
         time.sleep(0.03)
         self.release(button)
 
+    def _ensure_keyboard(self):
+        if self.keyboard is None:
+            cap = {
+                self.e.EV_KEY: [
+                    self.e.KEY_LEFTCTRL,
+                    self.e.KEY_C,
+                    self.e.KEY_V,
+                ]
+            }
+            self.keyboard = self._uinput_cls(cap, name="mudra-shortcuts")
+
+    def ctrl_shortcut(self, key):
+        """Emit only the two keyboard shortcuts Mudra intentionally supports."""
+        code = {"c": self.e.KEY_C, "v": self.e.KEY_V}.get(key)
+        if code is None:
+            raise ValueError("Mudra only emits Ctrl+C and Ctrl+V")
+        self._ensure_keyboard()
+        self.keyboard.write(self.e.EV_KEY, self.e.KEY_LEFTCTRL, 1)
+        self.keyboard.write(self.e.EV_KEY, code, 1)
+        self.keyboard.syn()
+        time.sleep(0.015)
+        self.keyboard.write(self.e.EV_KEY, code, 0)
+        self.keyboard.write(self.e.EV_KEY, self.e.KEY_LEFTCTRL, 0)
+        self.keyboard.syn()
+
     def close(self):
-        try:
-            self.ui.close()
-        except Exception:
-            pass
+        for dev in (self.keyboard, self.ui):
+            if dev is None:
+                continue
+            try:
+                dev.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +408,8 @@ class HandMouse(QWidget):
             args.tap_lift, args.tap_return, args.tap_cooldown)
         self.thumb_drag = DepthHoldDetector(
             args.thumb_lift, args.thumb_return)
+        self.smart_context = SmartCopyPasteContext(
+            enabled=args.smart_pinky, max_nodes=args.atspi_max_nodes)
         self.setWindowTitle(f"mudra — {args.mode} mode")
         self.resize(560, 420)
         self.show()
@@ -484,11 +517,16 @@ class HandMouse(QWidget):
             elif not drag_active and ring_click:
                 self.mouse.click("right")
                 self.status = "RIGHT CLICK (ring)"
-            elif pinky_action:
-                # Wired to context-aware copy/paste in the next layer. Keeping
-                # detection separate makes the gesture testable without desktop
-                # accessibility APIs.
-                self.status = "PINKY ACTION"
+            elif pinky_action and not drag_active:
+                action, reason = self.smart_context.decide()
+                if action == "copy":
+                    self.mouse.ctrl_shortcut("c")
+                    self.status = "COPY (pinky)"
+                elif action == "paste":
+                    self.mouse.ctrl_shortcut("v")
+                    self.status = "PASTE (pinky)"
+                else:
+                    self.status = f"PINKY: {reason}"
             elif drag_active:
                 self.status = "DRAG (thumb lifted)"
             else:
@@ -697,6 +735,11 @@ def build_args():
                    help="desk mode: thumb Z excursion that starts drag")
     p.add_argument("--thumb-return", type=float, default=0.065,
                    help="desk mode: thumb return threshold that drops")
+    p.add_argument("--smart-pinky", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="desk mode: context-aware pinky copy/paste via AT-SPI")
+    p.add_argument("--atspi-max-nodes", type=int, default=2500,
+                   help="maximum accessibility nodes inspected per pinky action")
     p.add_argument("--median", type=int, default=3,
                    help="frames of cursor median filtering")
     p.add_argument("--mincutoff", type=float, default=1.0,
