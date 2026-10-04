@@ -7,13 +7,18 @@ bash -n setup.sh
 bash -n run.sh
 
 echo "== Python syntax =="
-python3 -m py_compile mudra.py mp_hand.py mapping.py gestures.py smart_context.py
+python3 -m py_compile \
+    mudra.py mp_hand.py mapping.py gestures.py smart_context.py runtime_settings.py
 
 echo "== pure Python unit tests =="
 python3 -m unittest discover -s tests -p 'test_*.py'
 
 echo "== Electron JS syntax =="
 node --check electron/main.js
+node --check electron/settings.js
+node --check electron/preload.js
+node --check electron/renderer.js
+node tests/dashboard-settings.test.js
 node -e 'const p=require("./package.json"); if (p.devDependencies.electron !== "45.0.0-alpha.14") process.exit(1)'
 
 echo "== security invariants =="
@@ -37,7 +42,17 @@ grep -Fq 'shell: false' electron/main.js
 grep -Fq 'class ControlChannel' mudra.py
 grep -Fq 'MIDDLE_TIP' mudra.py
 grep -Fq 'DepthTapDetector' mudra.py
+grep -Fq 'FourFingerScrollDetector' mudra.py
+grep -Fq 'REL_WHEEL' mudra.py
 grep -Fq 'SmartCopyPasteContext' mudra.py
+grep -Fq 'normalize_updates' mudra.py
+grep -Fq 'contextIsolation: true' electron/main.js
+grep -Fq 'nodeIntegration: false' electron/main.js
+grep -Fq 'sandbox: true' electron/main.js
+grep -Fq "connect-src 'none'" electron/dashboard.html
+grep -Fq 'contextBridge.exposeInMainWorld' electron/preload.js
+grep -Fq 'font-size: var(--font-size)' electron/dashboard.css
+grep -Fq 'outline: 5px solid var(--focus)' electron/dashboard.css
 grep -Fq 'getNSelections' smart_context.py
 if grep -Eq '\.(getText|getSelection)\(' smart_context.py; then
     echo "smart copy/paste must not read selected text contents"
