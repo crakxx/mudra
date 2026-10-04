@@ -2,9 +2,11 @@
 """mudra — control your mouse with hand gestures via a webcam.
 
 A webcam hand-mouse for Linux/Wayland. The default "desk" mode is designed
-for a camera mounted vertically above the hand. The middle fingertip controls
-the cursor while the other fingers act like dedicated mouse controls. The
-original front-facing air-mouse remains available with --mode air.
+for a camera in front of the hand, angled down toward the desk so the hand is
+clearly visible. The middle fingertip controls the cursor while the other
+fingers act like dedicated mouse controls. Set --camera-angle 90 for the old
+top-down geometry; the original free-air pointer remains available with
+--mode air.
 
 Desk-mode controls:
   middle finger : cursor anchor
@@ -47,7 +49,13 @@ from PyQt6.QtGui import QImage, QPainter, QColor, QFont
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from gestures import DepthHoldDetector, DepthTapDetector, FourFingerScrollDetector
-from mapping import camera_point_to_screen, transform_normalized, validate_area
+from mapping import (
+    camera_point_to_screen,
+    project_desk_normal,
+    transform_normalized,
+    validate_area,
+    validate_camera_angle,
+)
 from smart_context import SmartCopyPasteContext
 from runtime_settings import normalize_updates, values_from_args
 
@@ -289,11 +297,10 @@ def _curled_count(kp):
                if _dist(kp[tip], w) < _dist(kp[pip], w))
 
 
-def _finger_depth(kp, tip, base, hand_scale):
-    """Depth of one fingertip relative to its base, normalized by hand size."""
-    if kp.shape[1] < 3:
-        return 0.0
-    return float((kp[tip, 2] - kp[base, 2]) / max(hand_scale, 1e-3))
+def _finger_height(kp, tip, base, hand_scale, camera_angle, rotate):
+    """Desk-normal fingertip signal compensated for camera elevation."""
+    return project_desk_normal(
+        kp[tip], kp[base], hand_scale, camera_angle, rotate)
 
 
 def _orient_frame(frame, rotate, mirror_x, mirror_y):
@@ -521,6 +528,21 @@ class HandMouse(QWidget):
         if "conf" in changed:
             self.model.landmarker.conf_threshold = self.args.conf
 
+        if "camera_angle" in changed:
+            # A different projection changes every learned rest baseline.
+            # Release any active drag and relearn from the new geometry instead
+            # of converting an angle change into a synthetic click/scroll.
+            self._release_left()
+            self._reset_desk_gestures()
+            self._hist.clear()
+            self.fx = OneEuro(
+                mincutoff=self.args.mincutoff, beta=self.args.beta)
+            self.fy = OneEuro(
+                mincutoff=self.args.mincutoff, beta=self.args.beta)
+            self.setWindowTitle(
+                f"mudra — {self.args.mode} mode — "
+                f"camera {self.args.camera_angle:.0f}°")
+
         self.status = "settings updated"
         return True
 
@@ -582,16 +604,23 @@ class HandMouse(QWidget):
     def _handle_desk_hand(self, kp, conf, shape, now):
         h, w = shape[:2]
 
-        # MediaPipe already predicts relative Z. Normalize each fingertip's Z
-        # against its MCP and the hand's X/Y size, so moving the whole hand up
-        # or down does not look like a click.
+        # The camera may be frontal/angled instead of top-down.  Estimate
+        # displacement normal to the desk by blending oriented image-Y motion
+        # with MediaPipe's relative Z according to the configured elevation.
+        # 0° = frontal (Y dominates), 90° = top-down (Z dominates).
         scale = max(_dist(kp[INDEX_MCP], kp[PINKY_MCP]),
                     _dist(kp[WRIST], kp[MIDDLE_MCP])) + 1e-3
-        index_z = _finger_depth(kp, INDEX_TIP, INDEX_MCP, scale)
-        middle_z = _finger_depth(kp, MIDDLE_TIP, MIDDLE_MCP, scale)
-        ring_z = _finger_depth(kp, RING_TIP, RING_MCP, scale)
-        thumb_z = _finger_depth(kp, THUMB_TIP, THUMB_MCP, scale)
-        pinky_z = _finger_depth(kp, PINKY_TIP, PINKY_MCP, scale)
+        depth_args = (scale, self.args.camera_angle, self.args.rotate)
+        index_z = _finger_height(
+            kp, INDEX_TIP, INDEX_MCP, *depth_args)
+        middle_z = _finger_height(
+            kp, MIDDLE_TIP, MIDDLE_MCP, *depth_args)
+        ring_z = _finger_height(
+            kp, RING_TIP, RING_MCP, *depth_args)
+        thumb_z = _finger_height(
+            kp, THUMB_TIP, THUMB_MCP, *depth_args)
+        pinky_z = _finger_height(
+            kp, PINKY_TIP, PINKY_MCP, *depth_args)
 
         # Four-finger scrolling is intentionally evaluated before cursor/click
         # actions. Only the four non-thumb fingers participate: when all four
@@ -815,7 +844,11 @@ class HandMouse(QWidget):
         p.setPen(QColor(255, 255, 0))
         p.setFont(QFont("sans", 11))
         tag = "PAUSED" if self.paused else self.status
-        p.drawText(8, 22, f"mudra {self.args.mode} | {self.fps:4.1f} fps | {tag}")
+        angle = (f" | camera {self.args.camera_angle:.0f}°"
+                 if self.args.mode == "desk" else "")
+        p.drawText(
+            8, 22,
+            f"mudra {self.args.mode}{angle} | {self.fps:4.1f} fps | {tag}")
         p.setPen(QColor(160, 160, 160))
         if self.args.mode == "desk":
             help_text = ("middle=cursor · index=L · ring=R · thumb=drag · "
@@ -841,17 +874,20 @@ class HandMouse(QWidget):
 
 def build_args():
     p = argparse.ArgumentParser(
-        description="mudra — overhead desk hand-mouse / air-mouse.")
+        description="mudra — front/angled desk hand-mouse / air-mouse.")
     p.add_argument("--camera", type=int, default=0)
     p.add_argument("--mode", choices=("desk", "air"), default="desk",
-                   help="desk = overhead middle-finger cursor (default); "
-                        "air = original front-facing index-pointer mode")
+                   help="desk = front/angled middle-finger cursor (default); "
+                        "air = original free-air index-pointer mode")
+    p.add_argument("--camera-angle", type=float, default=30.0,
+                   help="camera elevation above the desk in degrees: "
+                        "0 = frontal, 90 = top-down (default: 30)")
     p.add_argument("--rotate", type=int, choices=(0, 90, 180, 270), default=0,
                    help="rotate camera coordinates clockwise before mapping")
     p.add_argument("--mirror-x", action=argparse.BooleanOptionalAction,
                    default=None,
-                   help="mirror left/right after rotation; defaults on in air "
-                        "mode and off in desk mode")
+                   help="mirror left/right after rotation; defaults on for "
+                        "the front-facing desk and air modes")
     p.add_argument("--mirror-y", action=argparse.BooleanOptionalAction,
                    default=False,
                    help="mirror top/bottom after rotation")
@@ -910,7 +946,9 @@ def build_args():
     args = p.parse_args()
 
     if args.mirror_x is None:
-        args.mirror_x = args.mode == "air"
+        # The new desk default faces the user from the front, so mirror X like
+        # a familiar webcam preview. --no-mirror-x remains available.
+        args.mirror_x = True
 
     if args.margin is None:
         args.margin = 0.10 if args.mode == "desk" else 0.15
@@ -925,6 +963,7 @@ def build_args():
 
     try:
         validate_area(args.area)
+        args.camera_angle = validate_camera_angle(args.camera_angle)
     except ValueError as exc:
         p.error(str(exc))
 
@@ -942,7 +981,8 @@ def main():
             sys.exit(f"Missing hand model: {m}\nRun ./setup.sh to fetch it.")
 
     print(f"inference=OpenCV-dnn (CPU)  pointer=absolute (uinput tablet)  "
-          f"mode={args.mode} rotate={args.rotate} mirror_x={args.mirror_x} "
+          f"mode={args.mode} camera_angle={args.camera_angle:.0f}° "
+          f"rotate={args.rotate} mirror_x={args.mirror_x} "
           f"mirror_y={args.mirror_y} area={args.area}")
     model = HandTracker(PALM_MODEL, HAND_MODEL, args.conf)
 
@@ -967,8 +1007,9 @@ def main():
     win = HandMouse(model, cap, mouse, control, args)  # noqa: F841
     signal.signal(signal.SIGINT, lambda *_: win.quit())
     if args.mode == "desk":
-        print("mudra desk mode: middle=cursor; index=left; ring=right; "
-              "thumb=drag; pinky=copy/paste; four fingers=scroll.")
+        print("mudra desk mode: front/angled camera; middle=cursor; "
+              "index=left; ring=right; thumb=drag; pinky=copy/paste; "
+              f"four fingers=scroll; camera={args.camera_angle:.0f}°.")
     else:
         print("mudra air mode: point with index; pinch to click; fist to grab.")
     rc = app.exec()

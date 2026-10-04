@@ -5,6 +5,7 @@ opening a camera, /dev/uinput or a GUI.
 """
 
 SETTING_SPECS = {
+    "camera_angle": {"type": "float", "min": 0.0, "max": 90.0},
     "tap_lift": {"type": "float", "min": 0.05, "max": 0.30},
     "tap_return": {"type": "float", "min": 0.01, "max": 0.12},
     "tap_cooldown": {"type": "float", "min": 0.05, "max": 0.80},
