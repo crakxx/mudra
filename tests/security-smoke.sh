@@ -41,6 +41,9 @@ grep -Fq 'io.github.crakxx.mudra.desktop' electron/main.js
 grep -Fq 'shell: false' electron/main.js
 grep -Fq 'class ControlChannel' mudra.py
 grep -Fq 'MIDDLE_TIP' mudra.py
+grep -Fq 'project_desk_normal' mudra.py
+grep -Fq 'camera_angle' runtime_settings.py
+grep -Fq 'camera_angle' electron/settings.js
 grep -Fq 'DepthTapDetector' mudra.py
 grep -Fq 'FourFingerScrollDetector' mudra.py
 grep -Fq 'REL_WHEEL' mudra.py

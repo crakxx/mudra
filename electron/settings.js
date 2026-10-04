@@ -1,6 +1,15 @@
 'use strict';
 
 const SETTINGS = Object.freeze({
+  camera_angle: {
+    type: 'number',
+    group: 'Kamera und Perspektive',
+    label: 'Kamerawinkel über der Tischfläche',
+    description: 'Wie steil die Kamera auf die Hand schaut. 0° bedeutet nahezu frontal, 90° bedeutet senkrecht von oben. Für eine gut sichtbare Hand sind etwa 20° bis 45° ein sinnvoller Startbereich.',
+    lower: 'Frontaler Blick. Die Hand ist besser von vorne sichtbar und Mudra gewichtet die Bewegung im Kamerabild stärker.',
+    higher: 'Steilerer Blick. Mudra gewichtet die MediaPipe-Tiefenschätzung stärker; bei 90° entspricht die Geometrie dem bisherigen Top-Down-Modus.',
+    default: 30.0, min: 0.0, max: 90.0, step: 1.0, precision: 0, unit: '°'
+  },
   tap_lift: {
     type: 'number',
     group: 'Klicks mit Zeige-, Ring- und kleinem Finger',
@@ -214,6 +223,7 @@ function applyUpdate(current, key, value) {
 }
 
 const VALUE_FLAGS = Object.freeze({
+  '--camera-angle': 'camera_angle',
   '--tap-lift': 'tap_lift',
   '--tap-return': 'tap_return',
   '--tap-cooldown': 'tap_cooldown',
