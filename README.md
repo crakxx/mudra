@@ -1,14 +1,19 @@
 # mudra
 
-**Replace the mouse with your hand and an overhead webcam on Linux/Wayland.**
+**Replace the mouse with your hand and a front/angled webcam on Linux/Wayland.**
 
-`mudra` now defaults to **desk mode**: mount the camera above your hand,
-roughly perpendicular to the desk. Your middle fingertip becomes the pointer
-anchor and the other fingers act as dedicated mouse controls. MediaPipe hand
+`mudra` defaults to **desk mode** with the camera in front of the hand,
+angled down toward the desk. A starting angle of about **30° above the desk**
+keeps the whole hand much easier to see than a straight top-down view while
+retaining the same finger-specific controls. Your middle fingertip is the
+pointer anchor and the other fingers act as dedicated mouse controls.
+
+The camera angle is adjustable live in the accessibility dashboard. `0°`
+means frontal and `90°` reproduces the old top-down geometry. MediaPipe hand
 landmarks run locally through OpenCV DNN and pointer/shortcut events are
 injected through `/dev/uinput`.
 
-The original front-facing air-mouse is still available with `--mode air`.
+The original free-air pointer remains available with `--mode air`.
 
 Global keyboard shortcuts are handled separately by a pinned Electron helper
 through the Wayland **XDG GlobalShortcuts portal**. The Python process never
@@ -16,9 +21,12 @@ opens physical `/dev/input/event*` keyboard devices.
 
 ## Desk mode
 
-Mount the webcam above the desk so it can see the whole hand. The default
-control layout is intentionally designed so the **middle finger can stay
-resting and steady** while the other fingers perform actions:
+Mount the webcam **in front of the hand and angle it down toward the desk**.
+The default is 30° above the table surface. This lets the camera see the hand
+more naturally from the front while the middle finger can stay resting and
+steady.
+
+The finger layout stays the same:
 
 | Finger | Action |
 |---|---|
@@ -98,9 +106,33 @@ Disable it with:
 ./run.sh --no-smart-pinky
 ```
 
-### Camera orientation and desk area
+### Camera angle, orientation and desk area
 
-If the camera is mounted in another orientation:
+The most important camera setting is the elevation above the desk:
+
+```bash
+./run.sh --camera-angle 30
+```
+
+Angle meaning:
+
+```text
+0°   = frontal / almost parallel to the desk
+30°  = recommended front/angled starting point
+45°  = steeper diagonal view
+90°  = old top-down geometry
+```
+
+Mudra uses this angle in the gesture geometry itself. At flatter angles,
+vertical movement in the camera image carries more weight. At steeper angles,
+MediaPipe's relative Z/depth carries more weight. Changing the angle in the
+dashboard resets the learned finger rest planes safely so the change does not
+turn into a synthetic click or drag.
+
+You can change **Kamerawinkel über der Tischfläche** live in the dashboard;
+no restart is required.
+
+If the camera is mounted in another rotation:
 
 ```bash
 ./run.sh --rotate 90
@@ -120,8 +152,8 @@ the full desktop.
 
 ### Depth tuning
 
-Defaults are intended as a starting point because webcams and hand angles
-differ:
+Defaults are intended as a starting point because webcams, mounting angle and
+hand posture differ:
 
 ```bash
 ./run.sh --tap-lift 0.14 --tap-return 0.055
@@ -230,7 +262,23 @@ GlobalShortcuts portal rejects unidentifiable host applications.
 ./run.sh
 ```
 
-Beim normalen Start öffnet Electron zusätzlich das lokale **Mudra-Dashboard**.
+Beim normalen Start öffnet Electron das lokale **Mudra-Dashboard direkt im
+Vollbildmodus**. Die Kameravorschau sitzt klein und fest **oben rechts** im
+Dashboard. Sie ist an den Viewport gebunden und bleibt deshalb beim Scrollen an
+derselben Stelle.
+
+Unter Wayland wird dafür bewusst kein separates Kamerafenster positioniert:
+GNOME/Wayland garantiert Anwendungen keine frei wählbare Position für normale
+Top-Level-Fenster. Stattdessen überträgt Python eine kleine lokale
+JPEG-Vorschau über einen separaten Pipe-Kanal an Electron. Es gibt dabei keinen
+Netzwerkzugriff.
+
+Die Vorschau ist auf etwa 320 Pixel Breite begrenzt und auf ungefähr 10 Bilder
+pro Sekunde gedrosselt, damit die eigentliche Handerkennung Vorrang behält.
+Wenn das Dashboard läuft, bleibt das bisherige PyQt-Kamerafenster verborgen.
+Beim direkten Start mit `python3 mudra.py` bleibt die klassische Vorschau als
+Fallback erhalten.
+
 Die Handsteuerung läuft weiter, wenn das Dashboard-Fenster geschlossen wird.
 
 ### Barrierearmes Einstellungs-Dashboard
@@ -252,6 +300,7 @@ Electron lokal gespeichert. Ein Neustart ist zum Feinabstimmen nicht nötig.
 Explizite Startparameter überschreiben beim Start den gespeicherten Wert, z. B.:
 
 ```bash
+./run.sh --camera-angle 35
 ./run.sh --scroll-speed 120
 ```
 
@@ -266,6 +315,10 @@ sandbox          = true
 ```
 
 und einer Content-Security-Policy ohne Netzwerkzugriff (`connect-src 'none'`).
+
+Die eingebettete Kameravorschau verwendet ausschließlich einen geerbten lokalen
+Dateideskriptor zwischen Electron und Python. Die Frames verlassen den Rechner
+nicht.
 
 Mit **„Alle Werte auf Standard zurücksetzen“** lassen sich die empfohlenen
 Startwerte jederzeit wiederherstellen.
@@ -294,12 +347,12 @@ Ctrl+Alt+P / Ctrl+Alt+Q ─▶ Electron 45 alpha      │
                                      │ allow-listed
                                      │ pause / quit
                                      ▼
-overhead webcam ─▶ OpenCV DNN ─▶ 21 hand landmarks (X/Y/Z)
+front/angled webcam ─▶ OpenCV DNN ─▶ 21 hand landmarks (X/Y/Z)
                                       │
                          ┌────────────┼──────────────┐
                          ▼            ▼              ▼
-                  middle finger   depth gestures   pinky context
-                    X/Y cursor     clicks/drag       AT-SPI state
+                  middle finger   angle-aware height   pinky context
+                    X/Y cursor       clicks/drag        AT-SPI state
                          │
                          └──── four resting fingers ────▶ scroll
                          └────────────┬──────────────┘

@@ -15,10 +15,12 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 echo "== Electron JS syntax =="
 node --check electron/main.js
+node --check electron/preview-stream.js
 node --check electron/settings.js
 node --check electron/preload.js
 node --check electron/renderer.js
 node tests/dashboard-settings.test.js
+node tests/preview-stream.test.js
 node -e 'const p=require("./package.json"); if (p.devDependencies.electron !== "45.0.0-alpha.14") process.exit(1)'
 
 echo "== security invariants =="
@@ -41,12 +43,22 @@ grep -Fq 'io.github.crakxx.mudra.desktop' electron/main.js
 grep -Fq 'shell: false' electron/main.js
 grep -Fq 'class ControlChannel' mudra.py
 grep -Fq 'MIDDLE_TIP' mudra.py
+grep -Fq 'project_desk_normal' mudra.py
+grep -Fq 'camera_angle' runtime_settings.py
+grep -Fq 'camera_angle' electron/settings.js
 grep -Fq 'DepthTapDetector' mudra.py
 grep -Fq 'FourFingerScrollDetector' mudra.py
 grep -Fq 'REL_WHEEL' mudra.py
 grep -Fq 'SmartCopyPasteContext' mudra.py
 grep -Fq 'normalize_updates' mudra.py
 grep -Fq 'contextIsolation: true' electron/main.js
+grep -Fq 'fullscreen: true' electron/main.js
+grep -Fq "'--preview-fd', '3'" electron/main.js
+grep -Fq "stdio: ['pipe', 'inherit', 'inherit', 'pipe']" electron/main.js
+grep -Fq 'class PreviewChannel' mudra.py
+grep -Fq 'position: fixed' electron/dashboard.css
+grep -Fq 'top: 1rem' electron/dashboard.css
+grep -Fq 'right: 1rem' electron/dashboard.css
 grep -Fq 'nodeIntegration: false' electron/main.js
 grep -Fq 'sandbox: true' electron/main.js
 grep -Fq "connect-src 'none'" electron/dashboard.html

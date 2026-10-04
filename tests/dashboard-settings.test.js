@@ -15,8 +15,10 @@ assert.equal(Object.keys(base).length, Object.keys(SETTINGS).length);
 assert.deepEqual(validateState({ ...base }), base);
 
 assert.equal(applyUpdate(base, 'scroll_speed', 120).scroll_speed, 120);
+assert.equal(applyUpdate(base, 'camera_angle', 35).camera_angle, 35);
 assert.throws(() => applyUpdate(base, 'unknown', 1), /Unbekannte Einstellung/);
 assert.throws(() => applyUpdate(base, 'conf', 1.0), /zwischen/);
+assert.throws(() => applyUpdate(base, 'camera_angle', 91), /zwischen/);
 assert.throws(() => applyUpdate(base, 'smart_pinky', 1), /Ein oder Aus/);
 assert.throws(
   () => applyUpdates(base, { tap_lift: 0.08, tap_return: 0.09 }),
@@ -28,11 +30,13 @@ assert.throws(
 );
 
 const cli = fromPythonArgs(base, [
+  '--camera-angle', '42',
   '--scroll-speed', '140',
   '--tap-lift=0.18',
   '--no-smart-pinky',
   '--invert-scroll'
 ]);
+assert.equal(cli.camera_angle, 42);
 assert.equal(cli.scroll_speed, 140);
 assert.equal(cli.tap_lift, 0.18);
 assert.equal(cli.smart_pinky, false);

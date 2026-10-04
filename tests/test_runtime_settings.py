@@ -5,6 +5,7 @@ from runtime_settings import SETTING_SPECS, normalize_updates, values_from_args
 
 
 DEFAULTS = {
+    "camera_angle": 30.0,
     "tap_lift": 0.14,
     "tap_return": 0.055,
     "tap_cooldown": 0.22,
@@ -44,6 +45,8 @@ class RuntimeSettingsTests(unittest.TestCase):
     def test_out_of_range_is_rejected(self):
         with self.assertRaises(ValueError):
             normalize_updates(DEFAULTS, {"conf": 1.0})
+        with self.assertRaises(ValueError):
+            normalize_updates(DEFAULTS, {"camera_angle": 91})
 
     def test_tap_return_must_stay_below_lift(self):
         with self.assertRaises(ValueError):
